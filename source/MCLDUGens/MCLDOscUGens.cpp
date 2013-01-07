@@ -60,7 +60,7 @@ void SawDPW_next_a(SawDPW *unit, int inNumSamples)
 		// Recalculate scale factor if needed
 		if(*freq != prevfreq){
 			prevfreq = *freq;
-			scalefac = SAMPLERATE / (8.f * prevfreq * (1.f - prevfreq/SAMPLERATE));
+			scalefac = SAMPLERATE / (8.f * prevfreq * (1.f - prevfreq*SAMPLEDUR));
 		}
 
 		// Differentiate and write the output, scaled to +-1
@@ -75,9 +75,25 @@ void SawDPW_next_a(SawDPW *unit, int inNumSamples)
 	unit->mScalefac = scalefac;
 }
 
+inline float SawDPW_tick_k(double & phase, float scalefac, float freq, float & val, float & oldval)
+{
+	phase += freq;
+	// The "phase" is our modulo counter, -1 to 1
+	if(phase >= 1.)  phase -= 2.;
+	else if(phase < -1.)  phase += 2.;
+
+	// Square the phase to produce a parabolic wave
+	oldval = val;
+	val = (phase*phase);
+
+	//Print("val %g, oldval %g\n", val, oldval);
+	// Differentiate and write the output, scaled to +-1
+	return (val-oldval) * scalefac;
+}
+
 void SawDPW_next_k(SawDPW *unit, int inNumSamples)
 {
-	float *out = OUT(0);
+	float *out = ZOUT(0);
 	float freq = IN0(0) * unit->mFreqMul;
 	float val    = unit->mVal;
 	double phase = unit->mPhase;
@@ -86,25 +102,28 @@ void SawDPW_next_k(SawDPW *unit, int inNumSamples)
 	float scalefac;
 	if(freq != unit->mFreq){
 		unit->mFreq = freq;
-		scalefac = 1.f / (4.f * freq * (1.f - freq/SAMPLERATE));
+		scalefac = 1.f / (4.f * freq * (1.f - freq*SAMPLEDUR));
 		unit->mScalefac = scalefac;
 	}else{
 		scalefac = unit->mScalefac;
 	}
-	for (int i=0; i < inNumSamples; ++i)
-	{
-		// The "phase" is our modulo counter, -1 to 1
-		phase += freq;
-		if(phase >= 1.)  phase -= 2.;
-		if(phase < -1.)  phase += 2.;
-		// Square the phase to produce a parabolic wave
-		oldval = val;
-		val = (phase*phase);
-		//Print("val %g, oldval %g\n", val, oldval);
-		// Differentiate and write the output, scaled to +-1
-		//out[i] = (val-oldval) * SAMPLERATE / (4.f * freq * (1.f - freq/SAMPLERATE)); // Differentiate and scale amplitude to +-1
-		out[i] = (val-oldval) * scalefac; // Differentiate and scale amplitude to +-1
-	}
+
+	LOOP(inNumSamples >> 2,
+		 float out0 = SawDPW_tick_k(phase, scalefac, freq, val, oldval);
+		 float out1 = SawDPW_tick_k(phase, scalefac, freq, val, oldval);
+		 float out2 = SawDPW_tick_k(phase, scalefac, freq, val, oldval);
+		 float out3 = SawDPW_tick_k(phase, scalefac, freq, val, oldval);
+
+		 ZXP(out) = out0;
+		 ZXP(out) = out1;
+		 ZXP(out) = out2;
+		 ZXP(out) = out3;
+	 );
+
+	LOOP(inNumSamples & 3,
+		 ZXP(out) = SawDPW_tick_k(phase, scalefac, freq, val, oldval);
+	);
+
 	// store state back to the struct
 	unit->mPhase = phase;
 	unit->mVal   = val;
